@@ -4,17 +4,23 @@ const cars = require("../mockData");
 
 const router = express.Router();
 
-// Initialize Gemini Client
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "dummy_key_to_prevent_crash");
+// Initialize Gemini Client inside a function so it doesn't crash on load
+let genAI;
+try {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "dummy_key_to_prevent_crash");
+} catch (e) {
+  console.error("Failed to init genAI", e);
+}
 
 router.post("/", async (req, res) => {
-  const { message } = req.body;
-
-  if (!message) {
-    return res.status(400).json({ error: "Message is required" });
-  }
-
   try {
+    const body = req.body || {};
+    const message = body.message;
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
     // 1. Ask Gemini to extract search parameters
     const prompt = `
       You are an AI assistant for a used car search platform.
@@ -29,27 +35,23 @@ router.post("/", async (req, res) => {
       Example: {"brand": "BMW", "price_max": 20000, "location": null}
     `;
 
-    // Only call Gemini if a real API key is present, otherwise fallback to basic keyword matching for demonstration
     let extractedParams = { brand: null, price_max: null, location: null };
     
-    if (process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_API_KEY && genAI) {
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       const result = await model.generateContent(prompt);
       const response = await result.response;
       
       const textResponse = response.text().trim();
-      // Clean up potential markdown formatting (if Gemini includes ```json)
       const jsonString = textResponse.replace(/```json/g, "").replace(/```/g, "").trim();
       extractedParams = JSON.parse(jsonString);
     } else {
-      // Basic fallback logic for when API key is not yet provided by the user
       const lowerMessage = message.toLowerCase();
       if (lowerMessage.includes("bmw")) extractedParams.brand = "BMW";
       if (lowerMessage.includes("toyota")) extractedParams.brand = "Toyota";
       if (lowerMessage.includes("honda")) extractedParams.brand = "Honda";
       if (lowerMessage.includes("dhaka")) extractedParams.location = "Dhaka";
       
-      // Simple price extraction like "$20k" or "20000"
       const priceMatch = lowerMessage.match(/(?:under|<)\s*\$?(\d+)(k)?/);
       if (priceMatch) {
         extractedParams.price_max = parseInt(priceMatch[1]) * (priceMatch[2] ? 1000 : 1);
@@ -83,7 +85,7 @@ router.post("/", async (req, res) => {
       replyText = `Here are the ${extractedParams.brand}s I found:`;
     }
 
-    res.json({
+    return res.json({
       reply: replyText,
       results: filteredCars,
       debugParams: extractedParams
@@ -91,7 +93,7 @@ router.post("/", async (req, res) => {
 
   } catch (error) {
     console.error("Error processing search:", error);
-    res.status(500).json({ error: "Failed to process search request" });
+    return res.status(500).json({ error: "Failed to process search request: " + error.message });
   }
 });
 
